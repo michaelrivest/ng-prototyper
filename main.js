@@ -1,26 +1,21 @@
 
-let htmlParser = require('angular-html-parser')
 let fs = require('fs')
 let path = require('path');
+
+let htmlParser = require('angular-html-parser')
+let liveServer = require("live-server");
 
 let projectDir = path.join(__dirname, "projects")
 let protoDir = process.argv[2] ? path.join(process.cwd(), process.argv[2]) : process.cwd(); 
 let srcDir = getAngSrcDir(protoDir);
 
-let liveServer = require("live-server");
 
 function startServer(projectDir) {
     let liveServerParams = {
-        port: 8080, // Set the server port. Defaults to 8080.
-        host: "0.0.0.0", // Set the address to bind to. Defaults to 0.0.0.0 or process.env.IP.
-        root: projectDir, // Set root directory that's being served. Defaults to cwd.
-        open: false, // When false, it won't load your browser by default.
-        file: "index.html", // When set, serve this file (server root relative) for every 404 (useful for single-page applications)
-        wait: 20, // Waits for all changes, before reloading. Defaults to 0 sec.
-        logLevel: 1, // 0 = errors only, 1 = some, 2 = lots
-        middleware: [function(req, res, next) { next(); }] // Takes an array of Connect-compatible middleware that are injected into the server middleware stack
+        port: 8080, host: "0.0.0.0", 
+        root: projectDir, open: false, file: "index.html", 
+        wait: 20, logLevel: 1, middleware: [function(req, res, next) { next(); }] 
     };
-
     liveServer.start(liveServerParams);
 }
 
@@ -43,35 +38,19 @@ function getIndexHTML(project, cb) {
         getProtoHTML(project, (err, proto) => {
             if (err) return cb(err);
             else {
-                let html = `<!doctype html>` + head[0] + stylesHTML + `<body>` + proto + `</body>`;
-                return cb(null, html);
-            }
-        
-        })
-    })
-}
-
-function getHTML(project, styles, cb) {
-    fs.readFile(project.index, {encoding: 'utf8'}, (err, data) => {
-        if (err) console.log(err);
-        let head = data.match(/(<head>.*<\/head>)/is)
-        getProtoHTML(project, (err, proto) => {
-            if (err) return cb(err);
-            else {
-                let html = `<!doctype html>
-                    ${head[0]}
-                    <body>
-                        ${proto}
-                        <style>
-                            ${styles}
-                        </style>
+                let html = `
+                    <!doctype html> 
+                    ${head[0]} 
+                    ${stylesHTML} 
+                    </head>
+                    <body> 
+                         ${proto} 
                     </body>`;
                 return cb(null, html);
             }
         
         })
     })
-
 }
 
 function getProtoHTML(project, cb) {
@@ -102,7 +81,6 @@ function getAbsImportPaths(styles) {
     let matchEnd = importMatch.index + importMatch[0].length
     console.log(importMatch.index);
     console.log(matchEnd);
-
     }
 
 }
@@ -125,34 +103,26 @@ function concatCSS (project, cb) {
     }
 }
 
-function loadProjectFiles(project, cb) {
-        let cssPath = path.join(project.path, "styles.css");
-        concatCSS(project, (err, styles) => {
-            if (err) console.log(err);
-            else {
-            let htmlPath = path.join(project.path, 'index.html')
-                getHTML(project, styles, (err, html) => {
-                fs.writeFile(htmlPath, html, (err, saved) => {
-                    if (err) cb(err);
-                    else {
-                        cb(null)
-                    }
-                })   
-                })
-            }
-        })
-
-        
-/*
-        getIndexHTML(project, (err, html) => {
-            if (err) console.log(err);
+function loadProjectHTML(project, cb) {
+    let htmlPath = path.join(project.path, 'index.html')
+    getIndexHTML(project, (err, html) => {
+            if (err) cb(err);
             fs.writeFile(htmlPath, html, (err, saved) => {
                 if (err) cb(err);
-                else {
-                }
+                else cb(null) 
             })
         })
-        */
+
+}
+
+function loadProjectCSS(project, cb) {
+        let cssPath = path.join(project.path, "styles.css");
+        concatCSS(project, (err, styles) => {
+        fs.writeFile(cssPath, styles, (err, saved) => {
+                    if (err) cb(err);
+                    else cb(null)
+                }) 
+        })
 }
 
 function getWatchFiles(project) {
@@ -164,14 +134,13 @@ function initProject(project) {
     fs.mkdir(project.path, (err) => {
         if (err && err.code != 'EEXIST') cb(err);
 
-        console.time('load files')
-        loadProjectFiles(project, (err) => {
+     loadProjectHTML(project, (err) => {
+        if (err) console.log(err)
+        else loadProjectCSS(project, (err) => {
             if (err) console.log(err);
-            else {
-                console.timeEnd('load files')
-                startServer(project.path)
-            }
+            else startServer(project.path)
         })
+     })
     })
     
     let watchFiles = getWatchFiles(project);
@@ -179,9 +148,17 @@ function initProject(project) {
         fs.watch(f, {recursive:true}, (eventType, file) => {
             console.log(`File changed: ${file}`);
             console.log(eventType);
+            let ftype = path.extname(file)
+            if (ftype == '.css') {
+                loadProjectCSS(project, (err) => {})
+            } else if (ftype == '.html') {
+                loadProjectHTML(project, (err) => {})
+            }
+            /*
             loadProjectFiles(project, (err) => {
                 if (err) console.log(err); 
             })    
+            */
         })
     })
     
