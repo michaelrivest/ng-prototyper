@@ -10,6 +10,9 @@
   "license": "ISC",
   "dependencies": {
     "angular-html-parser": "^1.2.0",
-    "live-server": "^1.2.1"
+    "css": "^2.2.4",
+    "live-server": "^1.2.1",
+    "mr-arg-parser": "^1.0.14",
+    "sse": "0.0.8"
   }
 }
