@@ -1,7 +1,13 @@
 {
-  "name": "ng-prototyper",
-  "version": "0.1.1",
-  "description": "Prototype angular component styles quickly ",
+  "name": "ng-proto",
+  "version": "0.1.12",
+  "description": "Prototype angular components quickly ",
+  "keywords": [
+    "angular",
+    "ng",
+    "proto",
+    "live reload"
+  ],
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
@@ -13,6 +19,7 @@
   "license": "ISC",
   "dependencies": {
     "angular-html-parser": "^1.2.0",
+    "autoprefixer": "^9.4.7",
     "css": "^2.2.4",
     "live-server": "^1.2.1",
     "mr-arg-parser": "^1.0.14",

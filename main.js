@@ -9,6 +9,7 @@ let argParser = require('mr-arg-parser');
 
 let createServer = require('./lib/server');
 
+let GlobalStyles = require('./lib/global-styles')
 let common = require('./lib/common')
 let buildComponents = require('./lib/component-parser');
 let modVendorFile = require('./lib/mod-vendor-file');
@@ -21,7 +22,6 @@ let prototyperArgs = [
     { arg: '-d', name: 'dist', type: 'string' }, // Use an already build dist directory to skip building 
 
     { arg: '-o', name: 'buildOptions', type: 'array' }, // additional options to the ng build command
-
 ]
 
 let args = argParser(prototyperArgs)
@@ -34,35 +34,35 @@ function buildProject(project) {
         if (err && err.code != 'EEXIST') cb(err);
 
         if (args.skipBuild) {
-            project.components = buildComponents(project);
-            startServer(project)
+            postBuild(project)
         } else if (args.dist) {
-            let absDistDir = args.dist.includes(protoDir) ? args.dist : path.join(protoDir, args.dist);
+            let absDistDir = path.isAbsolute(args.dist) ? args.dist : path.join(process.cwd(), args.dist);
             copyDir(absDistDir, project.path, (err) => {
                 if (err) throw err;
-                postBuild(project); 
+                postBuild(project);
             })
         } else {
-            console.log("Building Project, this might take a minute...")
-            let buildCommand = `ng build --outputPath ${project.path}`
-            if (args.buildOptions) buildCommand += args.buildOptions.join(' ');
+            let buildCommand = `ng build --outputPath ${project.path} `
+            if (!args.buildOptions || !args.buildOptions.length) buildCommand += `--extractCss=true --sourceMap=false`
+            else buildCommand += args.buildOptions.join(' ');
+            console.log(`Building Project ${project.name}, this might take a minute... | ${buildCommand}`)
             cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
                 if (err) throw err;
                 if (stderr) console.log(stderr);
                 console.log("Completed Project Build")
                 postBuild(project);
-          })
+            })
         }
     })
 }
 
 function postBuild(project) {
-        project.components = buildComponents(project);
-                modVendorFile(project.path, (err) => {
-                    if (err) throw err;
-                    startServer(project)
-                })
-
+    let globalStyles = new GlobalStyles(project)
+    project.components = buildComponents(project);
+    modVendorFile(project.path, (err) => {
+        if (err) throw err;
+        startServer(project, globalStyles)
+    })
 }
 
 function copyDir(srcdir, dstdir, cb) {
@@ -73,31 +73,41 @@ function copyDir(srcdir, dstdir, cb) {
     })
 }
 
-function handleChanges(changes, clients) {
-    let handledFiles = [];
-    while (changes.length) {
-        let change = changes.pop();
-        if (handledFiles.includes(change.file)) {
-            // ignore older update on same file
-        } else {
-            if (change.type == 'css')  {
-                cssUpdate(clients, change.comp, change.file)
-            }
-            handledFiles.push(change.file)
-        }
-    }
-}
 
-function startServer(project) {
+
+function startServer(project, globalStyles) {
     let distDir = project.path;
     let changeBuffer = null;
     let bufferedChanges = [];
+    let clients = [];
+
+    function handleChanges() {
+        let handledFiles = [];
+        while (bufferedChanges.length) {
+            let change = bufferedChanges.pop();
+            if (handledFiles.includes(change.file)) {
+                // ignore older update on same file
+            } else {
+                if (change.type == 'css') {
+                    cssUpdate(clients, change.comp, change.file)
+                } else if (change.type == 'globalcss') {
+                    globalCssUpdate(clients, globalStyles)
+                }
+                handledFiles.push(change.file)
+            }
+        }
+    }
 
     console.log(`Project is running on ${args.host}:${args.port}`)
-    let clients = [];
     createServer(args.host, args.port, distDir, (client) => {
         clients.push(client);
         console.log("Client connected. Live reloading on changes")
+    })
+
+    fs.watch(globalStyles.globalStylesPath, (eventType, file) => {
+        bufferedChanges.push({ type: "globalcss", file })
+        clearTimeout(changeBuffer)
+        changeBuffer = setTimeout(() => { handleChanges() }, 30)
     })
 
     project.components.forEach((c) => {
@@ -105,13 +115,9 @@ function startServer(project) {
             c.styles.forEach((s) => {
                 fs.watch(s, (eventType, file) => {
                     console.log(`Detected CSS change: ${file} - ${c.cName}`)
-
                     bufferedChanges.push({ type: "css", comp: c, file: s })
                     clearTimeout(changeBuffer)
-                    changeBuffer = setTimeout(() => {
-                        handleChanges(bufferedChanges, clients)
-                    }, 30)
-
+                    changeBuffer = setTimeout(() => { handleChanges() }, 30)
                 })
             })
         }
@@ -160,25 +166,24 @@ function cssUpdate(clients, comp, file) {
         let selector = comp.selector;
         let styles = mapStyles(data);
         clients.forEach(client => {
-            client.send(JSON.stringify({ selector, styles }));
+            client.send(JSON.stringify({ type: 'component-css', selector, styles }));
         })
     })
 }
-function sseUpdater(project, client) {
-    return function (file) {
-        fs.readFile(file, { encoding: 'utf8' }, (err, data) => {
-            if (err) console.log(err)
-            let selector = getSelector(file, project)
-            let styles = mapStyles(data);
-            client.send(JSON.stringify({ selector, styles }));
-        })
-    }
 
+function globalCssUpdate(clients, globalStyles) {
+    globalStyles.cssUpdate((err) => {
+        if (err) console.log(err);
+        else {
+            clients.forEach(client => {
+                client.send(JSON.stringify({ type: 'global-css' }));
+            })
+        }
+    })
 }
 
 function initialize() {
     console.log("Gathering Project Info...")
-    console.log(args);
     let ang = common.loadAngularJson(protoDir);
     if (!ang) {
         console.log("Couldnt find angular.json file")
@@ -194,8 +199,9 @@ function initialize() {
     let p = { path: path.join(projectDir, ang.defaultProject), name: ang.defaultProject, root: pRoot, sourceRoot: srcRoot }
     p = Object.assign(p, project.architect.build.options)
     p.index = path.join(p.root, p.index);
-
-    p.componentPrefix = ang["schematics"]["@schematics/angular:component"]["prefix"]
+    p.styles = p.styles.map(s => {
+        return path.join(pRoot, s)
+    })
 
     let allFiles = common.getFileData([srcRoot])
     p.files = common.flattenFileData(allFiles)
