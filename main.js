@@ -7,14 +7,21 @@ let cp = require('child_process')
 let css = require('css')
 let argParser = require('mr-arg-parser');
 
-let sseServer = require('./lib/server');
+let createServer = require('./lib/server');
 
 let common = require('./lib/common')
+let buildComponents = require('./lib/component-parser');
+let modVendorFile = require('./lib/mod-vendor-file');
 
 let prototyperArgs = [
-    { arg: '-p', name: 'port', type: 'number', default: 8000 },
-    { arg: '-s', name: 'skipBuild', type: 'boolean' },
-    { arg: '-h', name: 'host', type: 'string', default: '0.0.0.0' },
+    { arg: '-h', name: 'host', type: 'string', default: '0.0.0.0' }, // host for the reload server
+    { arg: '-p', name: 'port', type: 'number', default: 8000 }, // port for the reload server
+
+    { arg: '-s', name: 'skipBuild', type: 'boolean' }, // Use the last build used for this project and just restart the server
+    { arg: '-d', name: 'dist', type: 'string' }, // Use an already build dist directory to skip building 
+
+    { arg: '-o', name: 'buildOptions', type: 'array' }, // additional options to the ng build command
+
 ]
 
 let args = argParser(prototyperArgs)
@@ -26,83 +33,91 @@ function buildProject(project) {
     fs.mkdir(project.path, (err) => {
         if (err && err.code != 'EEXIST') cb(err);
 
-
-        let distDir = project.path;
         if (args.skipBuild) {
+            project.components = buildComponents(project);
             startServer(project)
+        } else if (args.dist) {
+            let absDistDir = args.dist.includes(protoDir) ? args.dist : path.join(protoDir, args.dist);
+            copyDir(absDistDir, project.path, (err) => {
+                if (err) throw err;
+                postBuild(project); 
+            })
         } else {
             console.log("Building Project, this might take a minute...")
-            let buildCommand = `ng build --outputPath ${distDir}`
-            console.log(buildCommand)
+            let buildCommand = `ng build --outputPath ${project.path}`
+            if (args.buildOptions) buildCommand += args.buildOptions.join(' ');
             cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
                 if (err) throw err;
-                if (stderr) console.log(stderr)
+                if (stderr) console.log(stderr);
                 console.log("Completed Project Build")
-                modVendorFile(distDir, (err) => {
+                postBuild(project);
+          })
+        }
+    })
+}
+
+function postBuild(project) {
+        project.components = buildComponents(project);
+                modVendorFile(project.path, (err) => {
                     if (err) throw err;
-                    console.log(`Project is running on ${args.host}:${args.port}`)
                     startServer(project)
+                })
+
+}
+
+function copyDir(srcdir, dstdir, cb) {
+    cp.exec(`cp -r ${srcdir}/* ${dstdir}`, (err, stdout, stderr) => {
+        if (err) cb(err);
+        else if (stderr) cb(stderr);
+        else cb(null);
+    })
+}
+
+function handleChanges(changes, clients) {
+    let handledFiles = [];
+    while (changes.length) {
+        let change = changes.pop();
+        if (handledFiles.includes(change.file)) {
+            // ignore older update on same file
+        } else {
+            if (change.type == 'css')  {
+                cssUpdate(clients, change.comp, change.file)
+            }
+            handledFiles.push(change.file)
+        }
+    }
+}
+
+function startServer(project) {
+    let distDir = project.path;
+    let changeBuffer = null;
+    let bufferedChanges = [];
+
+    console.log(`Project is running on ${args.host}:${args.port}`)
+    let clients = [];
+    createServer(args.host, args.port, distDir, (client) => {
+        clients.push(client);
+        console.log("Client connected. Live reloading on changes")
+    })
+
+    project.components.forEach((c) => {
+        if (c.styles) {
+            c.styles.forEach((s) => {
+                fs.watch(s, (eventType, file) => {
+                    console.log(`Detected CSS change: ${file} - ${c.cName}`)
+
+                    bufferedChanges.push({ type: "css", comp: c, file: s })
+                    clearTimeout(changeBuffer)
+                    changeBuffer = setTimeout(() => {
+                        handleChanges(bufferedChanges, clients)
+                    }, 30)
+
                 })
             })
         }
     })
 }
 
-function startServer(project) {
-    let distDir = project.path;
-    sseServer(args.host, args.port, distDir, (client) => {
-        console.log("Client connected. Live reloading on changes")
-        let onUpdate = sseUpdater(project, client)
-        project.files.filter(f => path.extname(f).toLowerCase() == '.css').forEach(f => {
-            fs.watch(f, (eventType, file) => {
-                console.log("Detected change: " + f)
-                onUpdate(f)
-            })
-        })
-    })
-}
-
-
-function modVendorFile(distFolder, cb) {
-    let vendorFile = path.join(distFolder, 'vendor.js')
-
-    let vendorInsertText = fs.readFileSync(path.join(__dirname, 'vendorInsert'), { encoding: 'utf8' });
-    let styleInsertText = [`styleEl.setAttribute('ngp-style-id', component.id)`]
-    let style2InsertText = ['let cId = (style.match(/\\[_ngcontent-(.*?)\\]/))', `if (cId) {`,
-        `console.log(cId[1])`, `styleEl.setAttribute('ngp-style-id', cId[1])`, '}']
-
-    fs.readFile(vendorFile, { encoding: 'utf8' }, (err, data) => {
-        if (err) return cb(err);
-        let vendorSplit = data.split('\n')
-        let domInsertStart = `renderer.applyToHost(element)`
-        let domInsertText = [`if (element) {`, `window.NGPROTO.components[element.nodeName] = renderer.contentAttr.replace('_ngcontent-', '')`, `}`]
-        let styleInsertStart = `var styleEl = document.createElement('style')`
-        let styleInsertEnd = `_this.shadowRoot.appendChild(styleEl);`
-        let style2InsertStart = `DomSharedStylesHost.prototype._addStylesToHost = function (styles, host) {`
-        vendorSplit.forEach((line, i) => {
-            if (line.includes(domInsertStart)) {
-                let startIndex = i + 1;
-                vendorSplit.splice(startIndex, 0, ...domInsertText);
-            }
-            if (line.includes(styleInsertStart) && vendorSplit[i + 1].includes(styleInsertEnd)) {
-                let startIndex = i + 1;
-                vendorSplit.splice(startIndex, 0, ...styleInsertText);
-            }
-            if (line.includes(style2InsertStart)) {
-                let startIndex = i + 4;
-                vendorSplit.splice(startIndex, 0, ...style2InsertText);
-            }
-        })
-
-        let modVendorText = vendorInsertText + '\n' + vendorSplit.join('\n');
-        fs.writeFile(vendorFile, modVendorText, (err) => {
-            if (err) return cb(err);
-            else return cb(null)
-        })
-
-    })
-
-}
 
 
 function mapStyles(stylesheet) {
@@ -123,18 +138,37 @@ function mapStyles(stylesheet) {
     return css.stringify(parsed);
 }
 
-function getSelector(file, prefix) {
-    let name = path.basename(file);
-    let componentName = name.split('.component')[0]
-    console.log(prefix, componentName)
-    return `${prefix}-${componentName}`;
+function getSelector(file, project) {
+    let component;
+    if (path.extname(file) == '.css') {
+        component = project.components.find((comp) => {
+            if (!comp.styles) return false;
+            return (comp.styles.includes(file))
+        })
+
+    } else if (path.extname(file) == '.html') {
+        component = project.components.find((comp) => {
+            return comp.template == file;
+        })
+    }
+    return component.selector;
 }
 
+function cssUpdate(clients, comp, file) {
+    fs.readFile(file, { encoding: 'utf8' }, (err, data) => {
+        if (err) console.log(err)
+        let selector = comp.selector;
+        let styles = mapStyles(data);
+        clients.forEach(client => {
+            client.send(JSON.stringify({ selector, styles }));
+        })
+    })
+}
 function sseUpdater(project, client) {
     return function (file) {
         fs.readFile(file, { encoding: 'utf8' }, (err, data) => {
             if (err) console.log(err)
-            let selector = getSelector(file, project.componentPrefix)
+            let selector = getSelector(file, project)
             let styles = mapStyles(data);
             client.send(JSON.stringify({ selector, styles }));
         })
@@ -143,6 +177,8 @@ function sseUpdater(project, client) {
 }
 
 function initialize() {
+    console.log("Gathering Project Info...")
+    console.log(args);
     let ang = common.loadAngularJson(protoDir);
     if (!ang) {
         console.log("Couldnt find angular.json file")
