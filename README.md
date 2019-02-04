@@ -1,6 +1,6 @@
 
 ### ng-proto
-This package allows you to quickly edit Angular templates/styles and see your changes immediately in your browser, without lengthy rebuild / reload times. Currently, live reloading only works with css files.
+This package allows you to quickly edit Angular templates/styles and see your changes immediately, without lengthy reload times. Currently, live reloading only works with css files.
 For use with Angular CLI version 6+
 
 ### Install

@@ -128,8 +128,15 @@ function startServer(project, globalStyles) {
 
 
 
-function mapStyles(stylesheet) {
-    let parsed = css.parse(stylesheet);
+function mapStyles(stylesheet, filename = "") {
+    let parsed;
+    try {
+        parsed = css.parse(stylesheet);
+    } catch (err) {
+        console.log(`Error: ${err.reason} in ${path.basename(filename)} ${err.line}:${err.column}`)
+        return null;
+    }
+
     if (parsed.stylesheet.parsingErrors.length != 0) {
         parsed.stylesheet.parsingErrors.forEach(err => console.log(err))
         throw (Error("Error parsing stylesheet - exiting"))
@@ -143,7 +150,7 @@ function mapStyles(stylesheet) {
             })
         }
     }
-    return css.stringify(parsed);
+    return css.stringify(parsed).replace(/\n/g, ' ');
 }
 
 function getSelector(file, project) {
@@ -166,9 +173,10 @@ function cssUpdate(clients, comp, file) {
     fs.readFile(file, { encoding: 'utf8' }, (err, data) => {
         if (err) console.log(err)
         let selector = comp.selector;
-        let styles = mapStyles(data);
+        let styles = mapStyles(data, file);
         clients.forEach(client => {
-            client.send(JSON.stringify({ type: 'component-css', selector, styles }));
+            if (styles) client.send(JSON.stringify({ type: 'component-css', selector, styles }));
+            else client.send(JSON.stringify({ type: 'error' }))
         })
     })
 }
