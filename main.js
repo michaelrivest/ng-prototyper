@@ -34,11 +34,13 @@ function buildProject(project) {
         if (err && err.code != 'EEXIST') cb(err);
 
         if (args.skipBuild) {
+            console.log(`Skipping Project Build - Executing post build and starting server...`)
             postBuild(project)
         } else if (args.dist) {
             let absDistDir = path.isAbsolute(args.dist) ? args.dist : path.join(process.cwd(), args.dist);
             copyDir(absDistDir, project.path, (err) => {
                 if (err) throw err;
+                console.log(`Copied Project Build from ${args.dist} - Executing post build and starting server...`)
                 postBuild(project);
             })
         } else {
@@ -49,7 +51,7 @@ function buildProject(project) {
             cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
                 if (err) throw err;
                 if (stderr) console.log(stderr);
-                console.log("Completed Project Build")
+                console.log("Project Build Complete - Executing post build and starting server...")
                 postBuild(project);
             })
         }

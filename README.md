@@ -1,28 +1,29 @@
 
 ### ng-proto
-This package allows you to quickly edit angular templates without lengthy rebuild times. Currently, fast reloading only works with css files.
+This package allows you to quickly edit Angular templates/styles and see your changes immediately in your browser, without lengthy rebuild / reload times. Currently, live reloading only works with css files.
 For use with Angular CLI version 6+
 
+### Install
 ```
 npm install -g ng-proto
 ```
 
-To run, use the ng-proto command anywhere in your project directory, or: 
+### Run
+To run use the ng-proto command anywhere in your project directory, or: 
 ```
 ng-proto ./angular_project_directory
 ```
 
-```
-Or if your project is already built, specify the dist directory:
+If your project is already built, you can just specify the dist directory:
 ```
 ng-proto -d ./dist
 ```
 
-Specify additional options to ng build with -o: 
+Specify additional Angular CLI build options with -o: 
 ```
 ng-proto -o --i18nFile=i18nFile
-
-ng-proto uses your build outputs styles.css to update global styles, and vendor.js to insert some code into the client, so make sure if you build manually or change any build options that your output includes both of these files unminified. 
+```
+Your build outputs styles.css and vendor.js are used for the live reload functionality, so make sure if you build manually or change build options that your build output includes both of these files unminified. 
 
 
 
