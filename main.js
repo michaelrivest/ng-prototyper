@@ -44,9 +44,10 @@ function buildProject(project) {
                 postBuild(project);
             })
         } else {
+            let defaultOpts = `--extractCss=true --sourceMap=false `;
             let buildCommand = `ng build --outputPath ${project.path} `
-            if (!args.buildOptions || !args.buildOptions.length) buildCommand += `--extractCss=true --sourceMap=false`
-            else buildCommand += args.buildOptions.join(' ');
+            if (!args.buildOptions || !args.buildOptions.length) buildCommand += defaultOpts;
+            else buildCommand += defaultOpts + args.buildOptions.join(' ');
             console.log(`Building Project ${project.name}, this might take a minute... | ${buildCommand}`)
             cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
                 if (err) throw err;

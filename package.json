@@ -1,7 +1,7 @@
 {
   "name": "ng-proto",
-  "version": "0.1.15",
-  "description": "Prototype angular components quickly ",
+  "version": "0.1.2",
+  "description": "Prototype Angular component styles quickly",
   "keywords": [
     "angular",
     "ng",
@@ -15,7 +15,12 @@
   "bin": {
     "ng-proto": "./main.js"
   },
-  "author": "",
+  "author": "Michael Rivest",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelrivest/ng-prototyper"
+  },
+  "homepage": "https://github.com/michaelrivest/ng-prototyper",
   "license": "ISC",
   "dependencies": {
     "autoprefixer": "^9.4.7",
