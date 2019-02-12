@@ -8,6 +8,7 @@ let css = require('css')
 let argParser = require('mr-arg-parser');
 
 let createServer = require('./lib/server');
+let createProxyServer = require('./lib/proxyServer');
 
 let GlobalStyles = require('./lib/global-styles')
 let common = require('./lib/common')
@@ -18,7 +19,9 @@ let prototyperArgs = [
     { arg: '-h', name: 'host', type: 'string', default: '0.0.0.0' }, // host for the reload server
     { arg: '-p', name: 'port', type: 'number', default: 8000 }, // port for the reload server
 
-    { arg: '-s', name: 'skipBuild', type: 'boolean' }, // Use the last build used for this project and just restart the server
+    { arg: '-s', name: 'serve', type: 'boolean' }, // Use ng serve and proxy requests to serve updates 
+
+    { arg: '-n', name: 'noBuild', type: 'boolean' }, // Use the last build used for this project and just restart the server
     { arg: '-d', name: 'dist', type: 'string' }, // Use an already build dist directory to skip building 
 
     { arg: '-o', name: 'buildOptions', type: 'array' }, // additional options to the ng build command
@@ -26,45 +29,154 @@ let prototyperArgs = [
 
 let args = argParser(prototyperArgs)
 
+let servePort = 4201;
+
 let projectDir = path.join(__dirname, "projects")
 let protoDir = args._[0] ? path.join(process.cwd(), args._[0]) : process.cwd();
 
-function buildProject(project) {
-    fs.mkdir(project.path, (err) => {
-        if (err && err.code != 'EEXIST') cb(err);
-
-        if (args.skipBuild) {
-            console.log(`Skipping Project Build - Executing post build and starting server...`)
-            postBuild(project)
-        } else if (args.dist) {
-            let absDistDir = path.isAbsolute(args.dist) ? args.dist : path.join(process.cwd(), args.dist);
-            copyDir(absDistDir, project.path, (err) => {
-                if (err) throw err;
-                console.log(`Copied Project Build from ${args.dist} - Executing post build and starting server...`)
-                postBuild(project);
+function buildProjectAndStartServer(project) {
+    if (args.serve && args.noBuild) {
+        console.log("Skipping Project Build and Starting in serve mode")
+        postBuild(project, (err, gStyles) => {
+            serveProject(project, (err) => {
+                if (err) console.log(err);
             })
-        } else {
-            let defaultOpts = `--extractCss=true --sourceMap=false `;
-            let buildCommand = `ng build --outputPath ${project.path} `
-            if (!args.buildOptions || !args.buildOptions.length) buildCommand += defaultOpts;
-            else buildCommand += defaultOpts + args.buildOptions.join(' ');
-            console.log(`Building Project ${project.name}, this might take a minute... | ${buildCommand}`)
-            cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
-                if (err) throw err;
-                if (stderr) console.log(stderr);
-                console.log("Project Build Complete - Executing post build and starting server...")
-                postBuild(project);
+            postServe(project, gStyles)
+        })
+    } else if (args.serve) {
+        console.log("Starting in serve mode")
+        buildProject(project, (err) => {
+            if (err) console.log(err)
+            else console.log("Project Built Successfully")
+            postBuild(project, (err, gStyles) => {
+                if (err) console.log(err);
+                serveProject(project, (err) => {
+                    if (err) console.log(err);
+                })
+                postServe(project, gStyles)
+            })
+        })
+
+    } else {
+        fs.mkdir(project.path, (err) => {
+            if (err && err.code != 'EEXIST') cb(err);
+
+            if (args.noBuild) {
+                console.log(`Skipping Project Build - Executing post build and starting server...`)
+                postBuild(project)
+            } else if (args.dist) {
+                let absDistDir = path.isAbsolute(args.dist) ? args.dist : path.join(process.cwd(), args.dist);
+                copyDir(absDistDir, project.path, (err) => {
+                    if (err) throw err;
+                    console.log(`Copied Project Build from ${args.dist} - Executing post build and starting server...`)
+                    postBuild(project);
+                })
+            } else {
+                buildProject(project, (err) => {
+                    console.log("Project Build Complete - Executing post build and starting server...")
+                    postBuild(project);
+                })
+            }
+        })
+    }
+}
+
+function serveProject(project, cb) {
+    let defaultOpts = `--sourceMap=false `;
+    let buildCommand = `ng serve --host ${args.host} --port ${servePort} --live-reload false `
+    if (!args.buildOptions || !args.buildOptions.length) buildCommand += defaultOpts;
+    else buildCommand += defaultOpts + args.buildOptions.join(' ');
+    console.log(`Serving Project ${project.name} | ${buildCommand}`)
+    cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
+        if (err) return cb(err)
+        if (stderr) return cb(stderr);
+        return cb(null);
+    })
+}
+function postServe(project, globalStyles) {
+    let distDir = project.path;
+    let changeBuffer = null;
+    let bufferedChanges = [];
+    let clients = [];
+
+    function handleChanges() {
+        let handledFiles = [];
+        let reload = false;
+        while (bufferedChanges.length) {
+            let change = bufferedChanges.pop();
+            if (handledFiles.includes(change.file)) {
+                // ignore older update on same file
+            } else {
+                if (change.type == 'css') {
+                    cssUpdate(clients, change.comp, change.file)
+                } else if (change.type == 'globalcss') {
+                    globalCssUpdate(clients, globalStyles)
+                } else if (change.type == 'reload') {
+                    reload = true;
+                }
+                handledFiles.push(change.file)
+            }
+        }
+        if (reload) reloadPage(clients);
+    }
+    createProxyServer(args.host, args.port, distDir, servePort, (client) => {
+        clients.push(client);
+        console.log("Client connected. Live reloading on changes")
+    })
+    project.files.forEach(f => {
+        if (path.extname(f) == '.ts') {
+            fs.watch(f, (eventType, file) => {
+                console.log(`Detected TS change: ${file}`)
+                bufferedChanges.push({ type: "reload" })
+                clearTimeout(changeBuffer)
+                changeBuffer = setTimeout(() => { handleChanges() }, 30)
+            })
+        }
+    })
+
+    project.components.forEach((c) => {
+        if (c.template.endsWith('html')) {
+            fs.watch(c.template, (eventType, file) => {
+                console.log(`Detected HTML change: ${file} - ${c.cName}`)
+                bufferedChanges.push({ type: "reload" })
+                clearTimeout(changeBuffer)
+                changeBuffer = setTimeout(() => { handleChanges() }, 30)
+            })
+        }
+        if (c.styles) {
+            c.styles.forEach((s) => {
+                fs.watch(s, (eventType, file) => {
+                    console.log(`Detected CSS change: ${file} - ${c.cName}`)
+                    bufferedChanges.push({ type: "css", comp: c, file: s })
+                    clearTimeout(changeBuffer)
+                    changeBuffer = setTimeout(() => { handleChanges() }, 30)
+                })
             })
         }
     })
 }
 
-function postBuild(project) {
+function buildProject(project, cb) {
+    let defaultOpts = `--extractCss=true --sourceMap=false `;
+    let buildCommand = `ng build --outputPath ${project.path} `
+    if (!args.buildOptions || !args.buildOptions.length) buildCommand += defaultOpts;
+    else buildCommand += defaultOpts + args.buildOptions.join(' ');
+    console.log(`Building Project ${project.name}, this might take a minute... | ${buildCommand}`)
+    cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
+        if (err) return cb(err)
+        if (stderr) return cb(stderr);
+        return cb(null);
+    })
+
+}
+
+function postBuild(project, proxy) {
     let globalStyles = new GlobalStyles(project)
     project.components = buildComponents(project);
-    modVendorFile(project.path, (err) => {
+    modVendorFile.save(project, (err) => {
         if (err) throw err;
-        startServer(project, globalStyles)
+        if (!proxy) startServer(project, globalStyles)
+        else return proxy(err, globalStyles);
     })
 }
 
@@ -113,6 +225,7 @@ function startServer(project, globalStyles) {
         changeBuffer = setTimeout(() => { handleChanges() }, 30)
     })
 
+    let nowBuilding = false;
     project.components.forEach((c) => {
         if (c.styles) {
             c.styles.forEach((s) => {
@@ -122,6 +235,18 @@ function startServer(project, globalStyles) {
                     clearTimeout(changeBuffer)
                     changeBuffer = setTimeout(() => { handleChanges() }, 30)
                 })
+            })
+        }
+        if (c.template.endsWith('html')) {
+            fs.watch(c.template, (eventType, file) => {
+                if (!nowBuilding) {
+                    nowBuilding = true
+                    buildProject(project, (err) => {
+                        if (err) console.log(err);
+                        console.log("Project build complete")
+                        nowBuilding = false;
+                    })
+                }
             })
         }
     })
@@ -192,6 +317,11 @@ function globalCssUpdate(clients, globalStyles) {
         }
     })
 }
+function reloadPage(clients) {
+    clients.forEach(client => {
+        client.send(JSON.stringify({ type: 'reload' }));
+    })
+}
 
 function initialize() {
     console.log("Gathering Project Info...")
@@ -217,7 +347,7 @@ function initialize() {
     let allFiles = common.getFileData([srcRoot])
     p.files = common.flattenFileData(allFiles)
 
-    buildProject(p)
+    buildProjectAndStartServer(p)
 }
 
 

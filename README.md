@@ -13,6 +13,11 @@ To run use the ng-proto command anywhere in your project directory, or:
 ```
 ng-proto ./angular_project_directory
 ```
+The default only instant reloads css changes as I havent figured out incremental compilation for templates, but with the -s option you can mimic ng serve live reload functionality for html/ts files while instantly updating stylesheets:
+```
+ng-proto -s ./angular_project_directory
+```
+
 
 If your project is already built, you can just specify the dist directory:
 ```
