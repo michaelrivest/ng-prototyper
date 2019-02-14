@@ -34,33 +34,41 @@ let servePort = 4201;
 let projectDir = path.join(__dirname, "projects")
 let protoDir = args._[0] ? path.join(process.cwd(), args._[0]) : process.cwd();
 
+let ngServeCompiled = false;
+
 function buildProjectAndStartServer(project) {
-    if (args.serve && args.noBuild) {
-        console.log("Skipping Project Build and Starting in serve mode")
-        postBuild(project, (err, gStyles) => {
-            serveProject(project, (err) => {
-                if (err) console.log(err);
-            })
-            postServe(project, gStyles)
-        })
-    } else if (args.serve) {
-        console.log("Starting in serve mode")
-        buildProject(project, (err) => {
-            if (err) console.log(err)
-            else console.log("Project Built Successfully")
+    fs.mkdir(project.path, (err) => {
+        if (err && err.code != 'EEXIST') cb(err);
+        if (args.serve && args.noBuild) {
+            console.log("Skipping Project Build and Starting in serve mode")
             postBuild(project, (err, gStyles) => {
-                if (err) console.log(err);
                 serveProject(project, (err) => {
                     if (err) console.log(err);
+                    else {
+                        console.log("Ng serve Compiled Successfully")
+                        ngServeCompiled = true;
+                    }
                 })
                 postServe(project, gStyles)
             })
-        })
-
-    } else {
-        fs.mkdir(project.path, (err) => {
-            if (err && err.code != 'EEXIST') cb(err);
-
+        } else if (args.serve) {
+            console.log("Starting in serve mode")
+            buildProject(project, (err) => {
+                if (err) console.log(err)
+                else console.log("Project Built Successfully")
+                postBuild(project, (err, gStyles) => {
+                    if (err) console.log(err);
+                    serveProject(project, (err) => {
+                        if (err) console.log(err);
+                        else {
+                            console.log("Ng serve Compiled Successfully")
+                            ngServeCompiled = true;
+                        }
+                    })
+                    postServe(project, gStyles)
+                })
+            })
+        } else {
             if (args.noBuild) {
                 console.log(`Skipping Project Build - Executing post build and starting server...`)
                 postBuild(project)
@@ -77,20 +85,32 @@ function buildProjectAndStartServer(project) {
                     postBuild(project);
                 })
             }
-        })
-    }
+        }
+    })
 }
 
 function serveProject(project, cb) {
-    let defaultOpts = `--sourceMap=false `;
-    let buildCommand = `ng serve --host ${args.host} --port ${servePort} --live-reload false `
-    if (!args.buildOptions || !args.buildOptions.length) buildCommand += defaultOpts;
-    else buildCommand += defaultOpts + args.buildOptions.join(' ');
-    console.log(`Serving Project ${project.name} | ${buildCommand}`)
-    cp.exec(`(cd ${protoDir} && ${buildCommand})`, (err, stdout, stderr) => {
-        if (err) return cb(err)
-        if (stderr) return cb(stderr);
-        return cb(null);
+    let serveArgs = ['serve', '--host', args.host, '--port', servePort, '--live-reload', 'false', '--sourceMap=false']
+    if (args.buildOptions && args.buildOptions.length) serveArgs = serveArgs.concat(args.buildOptions);
+    let buildCommandStr = `ng ${serveArgs.join(' ')}`
+    console.log(`Initial Project Serve, this might take a minute.. | ${buildCommandStr}`)
+
+    let serveProc = cp.spawn('ng', serveArgs)
+    serveProc.stdout.on('data', (d) => {
+        let dStr = d.toString();
+        if (dStr.includes('Compiled successfully.')) {
+            process.emit('serveSuccess', true)
+            cb()
+        }
+        // console.log("ng serve: " + d)
+    })
+    serveProc.stderr.on('data', (d) => {
+        console.log(d.toString())
+        process.emit("serveError", d.toString())
+    })
+    serveProc.on('exit', (code) => {
+        console.log(`Ng serve exited with code ${code}`);
+        process.exit();
     })
 }
 function postServe(project, globalStyles) {
@@ -119,10 +139,28 @@ function postServe(project, globalStyles) {
         }
         if (reload) reloadPage(clients);
     }
-    createProxyServer(args.host, args.port, distDir, servePort, (client) => {
+    let server = createProxyServer(args.host, args.port, distDir, servePort, (client) => {
         clients.push(client);
-        console.log("Client connected. Live reloading on changes")
     })
+
+    process.on('serveSuccess', () => {
+        server.onServeCompiled()
+    })
+
+    process.on('serveError', (err) => {
+        server.onServeError(err)
+        clients.forEach(c => {
+            c.send(JSON.stringify({ type: 'error', error: err }));
+        })
+    })
+
+    fs.watch(globalStyles.globalStylesPath, (eventType, file) => {
+        bufferedChanges.push({ type: "globalcss", file })
+        clearTimeout(changeBuffer)
+        changeBuffer = setTimeout(() => { handleChanges() }, 30)
+    })
+
+
     project.files.forEach(f => {
         if (path.extname(f) == '.ts') {
             fs.watch(f, (eventType, file) => {
@@ -302,14 +340,19 @@ function cssUpdate(clients, comp, file) {
         let styles = mapStyles(data, file);
         clients.forEach(client => {
             if (styles) client.send(JSON.stringify({ type: 'component-css', selector, styles }));
-            else client.send(JSON.stringify({ type: 'error' }))
+            else client.send(JSON.stringify({ type: 'error', error: "Error Parsing Component Css" }))
         })
     })
 }
 
 function globalCssUpdate(clients, globalStyles) {
     globalStyles.cssUpdate((err) => {
-        if (err) console.log(err);
+        if (err) {
+            console.log(err);
+            clients.forEach(client => {
+                client.send(JSON.stringify({ type: 'error', error: "Error Parsing Global CSS" }));
+            })
+        }
         else {
             clients.forEach(client => {
                 client.send(JSON.stringify({ type: 'global-css' }));
@@ -317,10 +360,20 @@ function globalCssUpdate(clients, globalStyles) {
         }
     })
 }
+function checkSendReload(clients) {
+    if (ngServeCompiled) {
+        clients.forEach(client => {
+            client.send(JSON.stringify({ type: 'reload' }));
+        })
+    } else {
+        setTimeout(() => {
+            checkSendReload(clients)
+        }, 25)
+    }
+}
 function reloadPage(clients) {
-    clients.forEach(client => {
-        client.send(JSON.stringify({ type: 'reload' }));
-    })
+    ngServeCompiled = false;
+    checkSendReload(clients);
 }
 
 function initialize() {
