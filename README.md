@@ -1,4 +1,6 @@
 
+
+
 ### ng-proto
 This package allows you to quickly edit Angular templates/styles and see your changes immediately, without lengthy reload times. Currently, live reloading only works with css files.
 For use with Angular CLI version 6+
@@ -29,6 +31,4 @@ Specify additional Angular CLI build options with -o:
 ng-proto -o --i18nFile=i18nFile
 ```
 Your build outputs styles.css and vendor.js are used for the live reload functionality, so make sure if you build manually or change build options that your build output includes both of these files unminified. 
-
-
 

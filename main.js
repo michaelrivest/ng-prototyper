@@ -163,12 +163,17 @@ function postServe(project, globalStyles) {
 
     project.files.forEach(f => {
         if (path.extname(f) == '.ts') {
-            fs.watch(f, (eventType, file) => {
-                console.log(`Detected TS change: ${file}`)
-                bufferedChanges.push({ type: "reload" })
-                clearTimeout(changeBuffer)
-                changeBuffer = setTimeout(() => { handleChanges() }, 30)
-            })
+            if (fs.existsSync(f)) {
+                fs.watch(f, (eventType, file) => {
+                    console.log(`Detected TS change: ${file}`)
+                    bufferedChanges.push({ type: "reload" })
+                    clearTimeout(changeBuffer)
+                    changeBuffer = setTimeout(() => { handleChanges() }, 30)
+                })
+            } else {
+                console.log("Project File Deleted before watch initiated: " + f)
+            }
+
         }
     })
 
@@ -307,16 +312,22 @@ function mapStyles(stylesheet, filename = "") {
     }
 
     for (let rule of (parsed.stylesheet.rules)) {
-        if (rule.selectors) {
+        rule = mapRule(rule);
+            }
+    return css.stringify(parsed).replace(/\n/g, ' ');
+}
+
+function mapRule(rule) {
+    if (rule.rules) {
+        rule.rules = rule.rules.map(mapRule(rule));
+    }
+if (rule.selectors) {
             rule.selectors = rule.selectors.map(s => {
                 let shimmed = s.split(/\s+/g).map(i => `${i}[_ngcontent-%COMP%]`).join(' ')
                 return shimmed;
             })
         }
-    }
-    return css.stringify(parsed).replace(/\n/g, ' ');
 }
-
 function getSelector(file, project) {
     let component;
     if (path.extname(file) == '.css') {
@@ -394,12 +405,12 @@ function initialize() {
     p = Object.assign(p, project.architect.build.options)
     p.index = path.join(p.root, p.index);
     p.styles = p.styles.map(s => {
-        return path.join(pRoot, s)
+        if (typeof s == 'string') return path.join(pRoot, s)
+        else return path.join(pRoot, s.input)
     })
 
     let allFiles = common.getFileData([srcRoot])
     p.files = common.flattenFileData(allFiles)
-
     buildProjectAndStartServer(p)
 }
 
