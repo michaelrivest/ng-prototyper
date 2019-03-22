@@ -319,7 +319,7 @@ function mapStyles(stylesheet, filename = "") {
 
 function mapRule(rule) {
     if (rule.rules) {
-        rule.rules = rule.rules.map(mapRule(rule));
+        rule.rules.forEach(r => mapRule(r));
     }
 if (rule.selectors) {
             rule.selectors = rule.selectors.map(s => {
